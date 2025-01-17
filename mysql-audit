@@ -1,0 +1,197 @@
+
+#!/bin/bash
+
+# MySQL Security Audit Script with Recommendations
+# Keshav Boodhun
+# Purpose: Audit MySQL for vulnerabilities and provide recommendations for fixing issues.
+
+# Set MySQL credentials (ensure these are securely stored or prompted interactively)
+MYSQL_USER="username"
+MYSQL_PASS="password"
+MYSQL_HOST="ip address"
+MYSQL_PORT="3306"
+
+# Default SSL setting (you can modify this based on your environment)
+SSL_OPTION="--ssl=FALSE"
+
+# Function to check the result of a command
+function check_result {
+    if [ $? -eq 0 ]; then
+        echo "[+] $1: Passed"
+    else
+        echo "[!] $1: Failed"
+        echo "    Recommendation: $2"
+    fi
+}
+
+# 0. Ensure connectivity (Access control)
+echo "[*] Checking MySQL connectivity..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT VERSION();" &> /dev/null
+if [ $? -ne 0 ]; then
+    echo "[!] Unable to connect to MySQL. Please check your credentials, connectivity, or SSL configuration."
+    exit 1
+fi
+echo "[+] MySQL is accessible."
+
+# Optionally, check if SSL is really required by testing without the --ssl option
+echo "[*] Testing MySQL connectivity without SSL..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" -e "SELECT VERSION();" &> /dev/null
+if [ $? -eq 0 ]; then
+    echo "[+] SSL is not required for the connection."
+    SSL_OPTION=""
+else
+    echo "[!] SSL is required for the connection. Using --ssl=FALSE"
+    SSL_OPTION="--ssl=FALSE"
+fi
+
+
+# 1. Check MySQL version (Secure system engineering principles)
+echo "[*] Checking MySQL version..."
+VERSION=$(mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT VERSION();" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+echo "[+] MySQL version: $VERSION"
+# Add recommendation if the version is outdated
+if [[ "$VERSION" < "8.0" ]]; then
+    echo "[!] MySQL version is outdated."
+    echo "    Recommendation: Upgrade to the latest stable version of MySQL to ensure you have the latest security patches."
+fi
+
+# 2. Check for anonymous users
+echo "[*] Checking for anonymous users..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT User, Host FROM mysql.user WHERE User='';"
+check_result "Anonymous users removed" "Remove anonymous users with: DELETE FROM mysql.user WHERE User=''; FLUSH PRIVILEGES;"
+
+# 3. Check for users with no passwords
+echo "[*] Checking for users with no passwords..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT User, Host FROM mysql.user WHERE authentication_string IS NULL OR authentication_string='';"
+check_result "All users have passwords set" "Set passwords for all users using: ALTER USER 'username'@'host' IDENTIFIED BY 'strong_password';"
+
+# 4. Check for the `root` user accessible from any host
+echo "[*] Checking for 'root' user accessible from any host..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION  -e "SELECT User, Host FROM mysql.user WHERE User='root' AND Host='%';"
+check_result "'root' user access restricted" "Restrict root access with: UPDATE mysql.user SET Host='localhost' WHERE User='root'; FLUSH PRIVILEGES;"
+
+# 5. Check for world-readable permissions
+echo "[*] Checking for world-readable databases..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW GRANTS;" | grep -i 'grant all privileges' | grep -E 'GRANT ALL PRIVILEGES ON \*\.\*'
+check_result "No world-readable databases" "Avoid granting global privileges. Use database-specific privileges where needed."
+
+# 6. Check for test databases
+echo "[*] Checking for test databases..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW DATABASES LIKE 'test%';"
+check_result "Test databases removed" "Remove test databases using: DROP DATABASE test;"
+
+# 7. Check secure_file_priv
+echo "[*] Checking secure_file_priv..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'secure_file_priv';"
+check_result "secure_file_priv set" "Set secure_file_priv in the MySQL configuration file to restrict file imports and exports."
+
+# 8. Check for audit log plugin
+echo "[*] Checking if audit log plugin is enabled..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW PLUGINS;" | grep -i "audit"
+check_result "Audit log plugin enabled" "Enable the audit log plugin with: INSTALL PLUGIN audit_log SONAME 'audit_log.so';"
+
+# 9. Check binary logging
+echo "[*] Checking binary logging..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'log_bin';"
+check_result "Binary logging enabled" "Enable binary logging in the MySQL configuration file (my.cnf) with: log_bin = mysql-bin."
+
+# 10. Check for default password plugin
+echo "[*] Checking for default password policy plugin..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'validate_password%';"
+check_result "Password validation plugin enabled" "Enable the password validation plugin to enforce strong password policies."
+
+# 11. Check SSL/TLS encryption
+echo "[*] Checking SSL/TLS encryption..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'have_ssl';"
+check_result "SSL/TLS encryption enabled" "Enable SSL/TLS by configuring certificates in the MySQL configuration file."
+
+# 12. Check for unused accounts
+echo "[*] Checking for unused accounts..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT User, Host FROM mysql.user WHERE User NOT IN ('mysql.session', 'mysql.sys');"
+check_result "No unused accounts found" "Remove unused accounts with: DROP USER 'username'@'host'; FLUSH PRIVILEGES;"
+
+# 13. Check for open network ports
+echo "[*] Checking if MySQL listens on localhost only..."
+LISTEN_ADDRESS=$(mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION  -e "SHOW VARIABLES LIKE 'bind_address';" | awk 'NR==2 {print $2}')
+if [ "$LISTEN_ADDRESS" == "127.0.0.1" ] || [ "$LISTEN_ADDRESS" == "localhost" ]; then
+    echo "[+] MySQL is bound to localhost"
+else
+    echo "[!] MySQL is not bound to localhost. Current bind address: $LISTEN_ADDRESS"
+    echo "    Recommendation: Update the bind_address in the MySQL configuration file to '127.0.0.1' or 'localhost' to restrict external access."
+fi
+
+# 14. Check for password expiration policy
+echo "[*] Checking password expiration policy..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'default_password_lifetime';"
+check_result "Password expiration policy set" "Ensure the password expiration policy is configured to enforce regular password changes."
+
+# 15. Check for general_log and slow_query_log settings
+echo "[*] Checking for general log and slow query log settings..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'general_log';"
+check_result "General log checked" "Enable the general log to monitor and audit all queries."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'slow_query_log';"
+check_result "Slow query log checked" "Enable the slow query log to identify inefficient queries."
+
+# 16. Check for appropriate SQL_MODE settings
+echo "[*] Checking SQL_MODE settings..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'sql_mode';"
+check_result "SQL_MODE settings checked" "Ensure SQL_MODE is set to enforce stricter mode for better data integrity."
+
+# 17. Verify secure connections for replication
+echo "[*] Verifying secure connections for replication..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'replication_ssl_enable';"
+check_result "Replication SSL enabled" "Enable SSL for replication to secure data transfers between nodes."
+
+# 18. Check for encrypted InnoDB tablespaces
+echo "[*] Checking for encrypted InnoDB tablespaces..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT NAME, SPACE, FILE_FORMAT, ENCRYPTION FROM information_schema.innodb_tablespaces WHERE ENCRYPTION='N';"
+check_result "Encrypted InnoDB tablespaces enabled" "Ensure InnoDB tablespaces are encrypted to protect sensitive data."
+
+# 19. Check for the use of deprecated or removed features
+echo "[*] Checking for deprecated or removed features..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'have_query_cache';"
+check_result "Deprecated features checked" "Disable deprecated features, like query cache, if not needed."
+
+# 20. Check for secure tmp_table_size and max_heap_table_size
+echo "[*] Checking tmp_table_size and max_heap_table_size..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'tmp_table_size';"
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'max_heap_table_size';"
+check_result "Temporary and heap table size settings checked" "Ensure tmp_table_size and max_heap_table_size are properly configured to limit resource consumption."
+
+# 21. Verify log_error is set for error logging
+echo "[*] Verifying log_error is configured..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'log_error';"
+check_result "Error logging verified" "Enable error logging to track and review error messages for troubleshooting and security analysis."
+
+# 22. Verify event scheduler is properly configured
+echo "[*] Verifying event scheduler configuration..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'event_scheduler';"
+check_result "Event scheduler configuration checked" "Ensure the event scheduler is configured securely to prevent unauthorized event scheduling."
+
+# 23. Verify innodb_strict_mode is enabled
+echo "[*] Verifying innodb_strict_mode..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'innodb_strict_mode';"
+check_result "InnoDB strict mode enabled" "Enable InnoDB strict mode to enforce better data integrity checks."
+
+# 24. Verify secure authentication plugin usage
+echo "[*] Verifying authentication plugin usage..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SELECT User, Host, plugin FROM mysql.user;"
+check_result "Authentication plugin verified" "Use secure authentication plugins, such as caching_sha2_password, instead of older, insecure methods."
+
+# 25. Verify proper timeout settings
+echo "[*] Verifying timeout settings..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'wait_timeout';"
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'interactive_timeout';"
+check_result "Timeout settings verified" "Ensure wait_timeout and interactive_timeout are configured to limit idle sessions."
+
+# 26. Check secure default storage engine
+echo "[*] Checking default storage engine..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'default_storage_engine';"
+check_result "Default storage engine is secure" "Ensure the default storage engine is set to InnoDB for its support for ACID transactions and row-level locking."
+
+# 27. Verify the use of secure_tmpdir for temporary files
+echo "[*] Verifying secure_tmpdir configuration..."
+mysql -u"$MYSQL_USER" -p"$MYSQL_PASS" -h"$MYSQL_HOST" -P"$MYSQL_PORT" $SSL_OPTION -e "SHOW VARIABLES LIKE 'secure_file_priv';"
+check_result "Secure tmpdir configuration verified" "Ensure the secure_tmpdir variable is set to prevent unsafe locations for temporary files."
+
+echo "[+] MySQL Security Audit Complete!"
